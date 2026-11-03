@@ -160,7 +160,11 @@ export function install(rt) {
       .then(() => Object.assign(status, { phase: 'installed', installed: chosen.version }))
       .catch((error) => {
         rt.warn('ds-bot: dsh update to %s failed: %s', chosen.version, error?.message ?? error)
-        Object.assign(status, { phase: 'failed', error: `${error?.message ?? error}${output ? ` — ${output.trim().slice(-400)}` : ''}`.slice(0, 600) })
+        const raw = `${error?.message ?? error}${output ? ` — ${output.trim().slice(-400)}` : ''}`
+        const redacted = typeof rt.redactSecrets === 'function' ? rt.redactSecrets(raw) : raw
+        // npm prints the registry URL it used, credentials included, when an install fails.
+        const safe = redacted.replace(/\/\/[^\s/@]*:[^\s/@]*@/g, '//[redacted]@')
+        Object.assign(status, { phase: 'failed', error: safe.slice(0, 600) })
       })
     return view()
   }

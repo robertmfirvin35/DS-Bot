@@ -23,6 +23,7 @@ import { join } from 'node:path'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { GROUP_LINE_READ, ROOM_IDLE_RELAY_LIMIT, ROOM_REPLY_TIMEOUT_MS, ROOM_STEP_GAP_MS, ROOM_WORK_GRACE_MS, SOURCE_KIND, TEAM_TOOLS, TEXT_KEPT } from './constants.js'
+import { groupLineLimit } from './steward.js'
 import { escapeRegExp, headOf, splitRef, textOf } from './text.js'
 import { mentionSpans, speakerOf } from '../shared/mentions.js'
 import { GROUP_REF, output } from './tools.js'
@@ -226,13 +227,26 @@ export function install(rt) {
     .filter(line => line.length !== undefined && !wholeLines.has(lineKey(room.id, line.seq)))
     .map(line => readFile(lineFile(room.id, line.seq), 'utf8').then(text => { wholeLines.set(lineKey(room.id, line.seq), text) }, () => {})))
 
-  // What a member reads of a line: all of it, up to GROUP_LINE_READ.
-  const memberText = room => (line) => {
+  // What a member reads of a line. The saved text stays up to GROUP_LINE_READ.
+  // A prompt uses a shorter cap when the member's window cannot hold several full lines.
+  const memberText = (room, limit = GROUP_LINE_READ) => (line) => {
     const read = line.length === undefined ? line.text : wholeLines.get(lineKey(room.id, line.seq))
     if (read === undefined) return `${line.text}… (cut; ${line.length} characters in all, the rest was not kept)`
     const length = line.length ?? read.length
-    const shown = headOf(read, GROUP_LINE_READ)
+    const shown = headOf(read, limit)
     return length > shown.length ? `${shown}… (cut; ${length} characters in all)` : shown
+  }
+
+  // The prompt cap for this member. Unknown or not-yet-routed models keep the fixed cap.
+  async function promptLineLimit(sessionId) {
+    if (typeof rt.contextLines !== 'function') return GROUP_LINE_READ
+    try {
+      const agent = await rt.resolveAgent(sessionId)
+      const lines = await rt.contextLines(agent.session)
+      return lines ? groupLineLimit(lines) : GROUP_LINE_READ
+    } catch {
+      return GROUP_LINE_READ
+    }
   }
 
   const appendRoom = (room, line) => {
@@ -305,7 +319,7 @@ export function install(rt) {
   // Lines from before the round's opening message are kept apart from this round, so
   // an earlier round (an old count-off, say) never reads as part of the current one.
   // `files` are the files of the lines shown, which go to the member with the prompt.
-  function roomPrompt(room, member, round, slot) {
+  function roomPrompt(room, member, round, slot, lineLimit = GROUP_LINE_READ) {
     const peers = room.members.filter(id => id !== member.id).map(rt.botOf).filter(Boolean)
       .map(bot => `${bot.name}${rt.isAdminOf(room, bot.id) ? ' (admin)' : ''}`)
     const leads = rt.isAdminOf(room, member.id)
@@ -326,9 +340,9 @@ export function install(rt) {
       notice,
       goal,
       leads ? adminNote(room) : '',
-      earlier.length ? `Earlier in the group, before this round (context only):\n${transcript(earlier, memberText(room))}` : '',
+      earlier.length ? `Earlier in the group, before this round (context only):\n${transcript(earlier, memberText(room, lineLimit))}` : '',
       current.length
-        ? `This round so far${spokeThisRound ? ', since your last message' : ', starting with the new message'} (oldest first):\n${transcript(current, memberText(room))}`
+        ? `This round so far${spokeThisRound ? ', since your last message' : ', starting with the new message'} (oldest first):\n${transcript(current, memberText(room, lineLimit))}`
         : 'Nothing new in this round since your last message.',
       round.shown?.includes(member.id) ? '' : referenceNote(round.references),
       working.length > 0 ? `Still at work on what they were asked; each posts here when done: ${working.map(item => `${item.bot.name} (${minutesSince(item.since)} min${item.unread > 0 ? `, with ${item.unread} group message(s) it has not read yet` : ''})`).join(', ')}.` : '',
@@ -778,7 +792,7 @@ export function install(rt) {
       return
     }
     await loadGroupLines(room)
-    const prompt = roomPrompt(room, member, round, slot)
+    const prompt = roomPrompt(room, member, round, slot, await promptLineLimit(session.id))
     round.shown?.push(member.id)
     const text = session.brief === undefined ? prompt.text : `${session.brief}\n\n${prompt.text}`
     const said = []

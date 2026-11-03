@@ -6,7 +6,7 @@
 //
 // Every line follows the model. Its declared window, less the room its reply
 // needs, is the usable context; the check line is a share of that.
-import { estimateTokens } from './text.js'
+import { estimateTokens, positiveInt } from './text.js'
 
 // For a model that declares no window.
 export const DEFAULT_WINDOW = 500_000
@@ -18,12 +18,40 @@ const STEWARD_TOKENS = 6_000
 const STEWARD_LINE_MAX = 1_500
 
 export function linesFor({ window, reserve, checkRatio }) {
-  const declared = Number.isInteger(window) && window > 0 ? window : DEFAULT_WINDOW
-  const room = Number.isInteger(reserve) && reserve > 0 ? reserve : 0
+  // A missing or unreadable window is the default. A numeric string is the window
+  // the model declared, not a missing one: otherwise a 32K local model is treated
+  // as 500K and is never condensed until the provider overflows.
+  const declared = positiveInt(window) ?? DEFAULT_WINDOW
+  const room = positiveInt(reserve) ?? 0
   const usable = Math.max(declared - room, Math.floor(declared / 2))
   const hard = Math.floor(usable * HARD_SHARE)
   const ratio = typeof checkRatio === 'number' && checkRatio > 0 && checkRatio < 1 ? checkRatio : DEFAULT_CHECK_RATIO
   return { window: declared, usable, hard, check: Math.min(Math.floor(usable * ratio), hard) }
+}
+
+// Completion tokens that still fit under the hard line. Providers reject a request
+// whose prompt plus max_tokens exceeds the window, so a note or checkpoint asked
+// for more than the room left is shortened. When it already fits, `asked` is
+// returned unchanged (a large model keeps the budget it has today).
+export function completionRoom({ window, used, asked }) {
+  const want = positiveInt(asked)
+  if (want === undefined) return asked
+  const size = positiveInt(window)
+  if (size === undefined) return want
+  const spent = Number.isFinite(used) && used > 0 ? Math.ceil(used) : 0
+  const room = Math.floor(size * HARD_SHARE) - spent
+  if (room >= want) return want
+  return Math.max(1, room)
+}
+
+// Characters of one group line copied into a member's prompt. The saved line is
+// not touched. A window that can hold the fixed cap keeps that cap; a small one
+// keeps a share of its usable context, so several earlier lines still leave room
+// to answer.
+export function groupLineLimit(lines, cap = 20_000) {
+  const usable = positiveInt(lines?.usable)
+  if (usable === undefined) return cap
+  return Math.min(cap, Math.max(400, Math.floor(usable / 8)))
 }
 
 export const STEWARD_SYSTEM = [

@@ -61,7 +61,7 @@ function dsh({ keys = {}, readOnly = [], user = {}, base = {}, catalog = { anthr
         ...Object.keys(catalog).map(id => ({ provider: id, displayName: id, settingsNs: 'llm-pi-ai', settingsPath: ['providers', id], declared: false })),
         ...routes().filter(id => !(id in catalog)).map(id => ({ provider: id, displayName: piValue().providers[id].displayName ?? id, settingsNs: 'llm-pi-ai', settingsPath: ['providers', id], declared: true })),
       ],
-      discoverModels: async (ns, request) => { discovered.push([ns, request]); return [{ id: 'relay-1', name: 'Relay One', contextWindow: 128000, inputModalities: ['text'] }, { id: 'relay-2' }] },
+      discoverModels: async (ns, request) => { discovered.push([ns, request]); return [{ id: 'relay-1', name: 'Relay One', contextWindow: '128000', inputModalities: ['text'] }, { id: 'relay-2' }] },
     },
   }
   const rt = { ctx, state: { bots: {} } }
@@ -153,6 +153,15 @@ test('a custom API goes in with its endpoint, protocol and the models picked', a
   assert.equal(store.RELAY_API_KEY, 'sk-relay')
   const view = await rt.providersView()
   assert.deepEqual([row(view, 'relay').name, row(view, 'relay').custom, row(view, 'relay').removable], ['My relay', true, true])
+})
+
+test('a custom model keeps a context window that arrived as a numeric string', async () => {
+  const { rt, writes } = dsh()
+  await rt.addProvider({
+    custom: true, provider: 'local', api: 'openai-completions', baseURL: 'http://127.0.0.1:8000/v1',
+    models: [{ id: 'qwen', contextWindow: '32768', maxTokens: '8192.9' }],
+  })
+  assert.deepEqual(writes[0][1][0].value.models, [{ id: 'qwen', contextWindow: 32768, maxTokens: 8192 }])
 })
 
 test('a custom API is refused before anything is written when it cannot serve', async () => {
