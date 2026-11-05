@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import { createRuntime } from '../index.js'
 import { lineText } from '../src/host/groups.js'
+import { linesFor } from '../src/host/steward.js'
 import { fakeAttachments, fakeContext } from './fake-ctx.js'
 
 // A fake team of two Bots in one group; member answers are played back through the
@@ -562,6 +563,27 @@ test('a group line longer than a member reads is cut in its prompt, with its len
   await running
   const line = rt.state.rooms[room.id].log.find(entry => entry.length === 25_000)
   assert.equal(readFileSync(join(home, 'group-lines', room.id, `${line.seq}.txt`), 'utf8').length, 20_000)
+})
+
+test('a small context window cuts a group line shorter in the prompt; the saved line stays the same', async (t) => {
+  const harness = start()
+  t.after(harness.stop)
+  harness.rt.contextLines = async () => linesFor({ window: 32_768, reserve: 8192, checkRatio: 0.8 })
+  const room = await team(harness.call, harness.sent)
+  await harness.emit(room.id, harness.userMessage('Go'))
+  const running = harness.relay(room.id, 'relay')
+  const first = await turnFor(harness.sent)
+  await harness.answer(first.sessionId, first.message.source.exchangeId, 'x'.repeat(25_000), 1)
+  const second = await turnFor(harness.sent, first)
+  const prompt = second.message.content[0].text
+  const cap = Math.floor(linesFor({ window: 32_768, reserve: 8192, checkRatio: 0.8 }).usable / 8)
+  const shown = prompt.match(new RegExp(`(x{${cap}})… \\(cut; 25000 characters in all\\)`))
+  assert.ok(shown, prompt.slice(0, 500))
+  assert.equal(prompt.includes('x'.repeat(cap + 1)), false)
+  await harness.answer(second.sessionId, second.message.source.exchangeId, 'Ok.', 2)
+  await running
+  const line = harness.rt.state.rooms[room.id].log.find(entry => entry.length === 25_000)
+  assert.equal(readFileSync(join(harness.home, 'group-lines', room.id, `${line.seq}.txt`), 'utf8').length, 20_000)
 })
 
 // 公开#176: a PDF the user sent in a group reached neither the log nor any member, so

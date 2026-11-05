@@ -19,7 +19,7 @@ import { BlockAssembler, createUserMessage } from '@deepseek-ai/dsh-llm'
 import { openTurnAt } from './btw.js'
 import { HANDOFF_ACK, HISTORY_TIMEOUT_MS, REPLY_KIND, SOURCE_KIND } from './constants.js'
 import { parseReplies, stackReplies } from '../shared/group-replies.js'
-import { CHECKPOINT_PROMPT, STEWARD_SYSTEM, checkpointCount, checkpointTail, checkpointTailNote, checkpointText, linesFor, parseDecision, stewardRequest } from './steward.js'
+import { CHECKPOINT_PROMPT, STEWARD_SYSTEM, checkpointCount, checkpointTail, checkpointTailNote, checkpointText, completionRoom, linesFor, parseDecision, stewardRequest } from './steward.js'
 import { RESUME_DELAY_MS } from './resume.js'
 import { clip, createClock, escapeRegExp, estimateTokens, splitRef, textOf } from './text.js'
 import { checkShownView, normalizeView, readViewReply, viewCardText, viewReply, viewReplyText } from 'deep-view/core'
@@ -253,6 +253,14 @@ export function install(rt) {
     return linesFor({ window: info.context?.contextWindow, reserve: route.maxTokens ?? info.defaultMaxTokens, checkRatio: config.checkRatio })
   }
 
+  // max_tokens is counted against the window. A note or checkpoint that asks for
+  // more than the room left is shortened; a request that already fits is unchanged.
+  async function fittedMaxTokens(session, prompt, asked) {
+    const lines = await contextLines(session).catch(() => undefined)
+    const used = (tokensOf(session) ?? 0) + estimateTokens(prompt)
+    return completionRoom({ window: lines?.window, used, asked })
+  }
+
   // The backend's own entry points leave Bot Sessions alone, earlier parts and group
   // records included: automatic pressure and overflow compaction do nothing, and
   // /compact and explicit ranges are refused. Only DS Bot condenses a Bot Session,
@@ -460,7 +468,7 @@ export function install(rt) {
         messages: [...messages, { role: 'user', content: [{ type: 'text', text: prompt }] }],
         toolHistory: session.toolHistory(),
         ...(header.tools ? { tools: [...header.tools] } : {}),
-        maxTokens: Math.min(NOTE_MAX_TOKENS, route.maxTokens ?? NOTE_MAX_TOKENS),
+        maxTokens: await fittedMaxTokens(session, prompt, Math.min(NOTE_MAX_TOKENS, route.maxTokens ?? NOTE_MAX_TOKENS)),
         sessionId: session.id,
         purpose: 'compaction',
         signal,
@@ -517,10 +525,10 @@ export function install(rt) {
     if (!route?.provider || !route?.model) throw new Error('the Session has not called a model yet')
     // The results list grows with the work, so the checkpoint may write as much as one
     // of the Bot's own replies.
-    const maxTokens = route.maxTokens
     const head = input.messages
     const tail = checkpointTail(head, session.deriveMessages())
     const prompt = tail.length === 0 ? CHECKPOINT_PROMPT : `${CHECKPOINT_PROMPT}\n\n${checkpointTailNote(tail)}`
+    const maxTokens = await fittedMaxTokens(session, prompt, route.maxTokens)
     const assembler = new BlockAssembler()
     for await (const chunk of ctx.llm.stream({
       provider: route.provider,
@@ -1469,5 +1477,5 @@ export function install(rt) {
     return { sessionId: parts.at(-1).sessionId, ...(await partPage(parts, index, cursor)) }
   }
 
-  Object.assign(rt, { clock, partsOf, historyEntry, partLines, noteText, earlierPage, chatPage, displayItems, followFolder, heldBack, switchJobs: () => switches.values() })
+  Object.assign(rt, { clock, contextLines, partsOf, historyEntry, partLines, noteText, earlierPage, chatPage, displayItems, followFolder, heldBack, switchJobs: () => switches.values() })
 }

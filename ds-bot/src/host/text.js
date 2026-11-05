@@ -19,6 +19,15 @@ export const textOf = content => (Array.isArray(content) ? content : [])
 
 export const normalize = value => String(value ?? '').trim().toLowerCase()
 
+// A positive whole number, from a number or a numeric string. Model routes often
+// carry contextWindow and maxTokens as strings ("32768").
+export function positiveInt(value) {
+  const number = typeof value === 'number' ? value : typeof value === 'string' && value.trim() !== '' ? Number(value.trim()) : NaN
+  if (!Number.isFinite(number) || number <= 0) return undefined
+  const whole = Math.trunc(number)
+  return whole > 0 ? whole : undefined
+}
+
 export const unquote = text => String(text ?? '').trim().replace(/^["'“”「『《]+|["'“”」』》]+$/g, '').trim()
 
 export const escapeRegExp = text => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')

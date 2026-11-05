@@ -3,6 +3,8 @@
 // it, the route's key in DSH's credential store under the reference the route names.
 // The providers to add are the ones DSH's directory of configurable providers offers.
 
+import { positiveInt } from './text.js'
+
 const PI_AI = 'llm-pi-ai'
 const ROUTE_ID = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/
 // The wire protocols DSH's pi-ai adapter serves on a route it ships nothing about.
@@ -38,12 +40,13 @@ function checkEndpoint(value) {
 function modelEntry(model) {
   const id = typeof model === 'string' ? model.trim() : typeof model?.id === 'string' ? model.id.trim() : ''
   if (id === '') throw invalid('Every model needs an id')
-  const whole = value => (Number.isInteger(value) && value > 0 ? value : undefined)
+  const contextWindow = positiveInt(model?.contextWindow)
+  const maxTokens = positiveInt(model?.maxTokens)
   return {
     id,
     ...(typeof model?.name === 'string' && model.name.trim() !== '' ? { name: model.name.trim() } : {}),
-    ...(whole(model?.contextWindow) ? { contextWindow: model.contextWindow } : {}),
-    ...(whole(model?.maxTokens) ? { maxTokens: model.maxTokens } : {}),
+    ...(contextWindow ? { contextWindow } : {}),
+    ...(maxTokens ? { maxTokens } : {}),
     ...(Array.isArray(model?.inputModalities) && model.inputModalities.length > 0 ? { input: model.inputModalities.filter(kind => typeof kind === 'string') } : {}),
   }
 }
@@ -197,8 +200,8 @@ export function install(rt) {
     return models.slice(0, MAX_MODELS).map(model => ({
       id: model.id,
       ...(model.name ? { name: model.name } : {}),
-      ...(model.contextWindow ? { contextWindow: model.contextWindow } : {}),
-      ...(model.maxTokens ? { maxTokens: model.maxTokens } : {}),
+      ...(positiveInt(model.contextWindow) ? { contextWindow: positiveInt(model.contextWindow) } : {}),
+      ...(positiveInt(model.maxTokens) ? { maxTokens: positiveInt(model.maxTokens) } : {}),
       ...(model.inputModalities ? { inputModalities: [...model.inputModalities] } : {}),
     }))
   }

@@ -11,7 +11,7 @@ afterEach(() => { globalThis.fetch = realFetch })
 
 // The dsh-update module alone: a stub loader says the running DSH version, a
 // stub plugin manager says how the bot was installed, and fetch is scripted.
-function start({ current = '0.1.0', source, answers = {}, app = false, spawn, config = {}, profileDir }) {
+function start({ current = '0.1.0', source, answers = {}, app = false, spawn, config = {}, profileDir, redactSecrets }) {
   const fetched = []
   const spawns = []
   const warnings = []
@@ -35,17 +35,21 @@ function start({ current = '0.1.0', source, answers = {}, app = false, spawn, co
     ctx: { get: name => ({ loader, pluginManager, profileContext })[name], effect() {} },
     config,
     warn: (...args) => warnings.push(args),
+    ...(redactSecrets ? { redactSecrets } : {}),
     dshSpawn: spawn ?? ((command, argv) => { spawns.push([command, argv]); return fakeChild(0) }),
   }
   install(rt)
   return { rt, fetched, spawns, warnings }
 }
 
-function fakeChild(code) {
+function fakeChild(code, stderr = '') {
   const child = new EventEmitter()
   child.stdout = new EventEmitter()
   child.stderr = new EventEmitter()
-  queueMicrotask(() => child.emit('close', code))
+  queueMicrotask(() => {
+    if (stderr !== '') child.stderr.emit('data', stderr)
+    child.emit('close', code)
+  })
   return child
 }
 
@@ -153,4 +157,24 @@ test('a failed npm install reports why and can be tried again', async () => {
   rt.dshUpdateStart()
   await flush()
   assert.equal((await rt.dshUpdateCheck()).phase, 'installed')
+})
+
+test('a failed npm install does not show registry credentials', async () => {
+  const secret = 'npm_supersecretTokenValue'
+  const { rt } = start({
+    source: `${PKG.name}@^${PKG.version}`,
+    answers: registryLatest({ verifiedDsh: '9.9.9' }),
+    redactSecrets: text => text.replaceAll(secret, '[secret:NPM]'),
+    spawn: () => fakeChild(1, `npm ERR! ${secret}\nhttps://user:pass@registry.npmjs.org/ds-bot\n`),
+  })
+  await rt.dshUpdateCheck()
+  rt.dshUpdateStart()
+  await flush()
+  const failed = await rt.dshUpdateCheck()
+  assert.equal(failed.phase, 'failed')
+  assert.match(failed.error, /npm exited 1/)
+  assert.match(failed.error, /\[secret:NPM\]/)
+  assert.match(failed.error, /\/\/\[redacted\]@registry/)
+  assert.equal(failed.error.includes(secret), false)
+  assert.equal(failed.error.includes('user:pass'), false)
 })

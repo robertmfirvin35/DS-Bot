@@ -154,7 +154,7 @@ export function install(rt) {
         rt.warn('ds-bot: unreadable secrets file %s; backed up as %s', path, backup)
       } catch (error) {
         blocked = reason(error)
-        rt.warn('ds-bot: unreadable secrets file %s; backup failed: %s', path, error)
+        rt.warn('ds-bot: unreadable secrets file %s; backup failed: %s', path, reason(error))
       }
       changed()
       return

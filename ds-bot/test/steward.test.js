@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { CHECKPOINT_PROMPT, DEFAULT_WINDOW, checkpointCount, checkpointTail, checkpointTailNote, checkpointText, linesFor, parseDecision, stewardRequest } from '../src/host/steward.js'
+import { CHECKPOINT_PROMPT, DEFAULT_WINDOW, checkpointCount, checkpointTail, checkpointTailNote, checkpointText, completionRoom, groupLineLimit, linesFor, parseDecision, stewardRequest } from '../src/host/steward.js'
 
 test('the lines follow the model: its window less the room for its reply', () => {
   assert.deepEqual(linesFor({ window: 500_000, reserve: 0, checkRatio: 0.8 }), { window: 500_000, usable: 500_000, hard: 475_000, check: 400_000 })
@@ -13,6 +13,13 @@ test('the lines follow the model: its window less the room for its reply', () =>
 test('a model without a window counts as the default, and odd settings fall back', () => {
   assert.equal(linesFor({}).window, DEFAULT_WINDOW)
   assert.equal(linesFor({ window: 0 }).window, DEFAULT_WINDOW)
+  assert.equal(linesFor({ window: 'nope' }).window, DEFAULT_WINDOW)
+  // A local route often reports the window as a string or a float. That is the
+  // model's window, not the 500K default.
+  assert.deepEqual(linesFor({ window: '32768', reserve: '8192', checkRatio: 0.8 }), linesFor({ window: 32_768, reserve: 8192, checkRatio: 0.8 }))
+  assert.equal(linesFor({ window: 32_768.9, reserve: 8192.2 }).window, 32_768)
+  assert.equal(linesFor({ window: 32_768, reserve: 8192 }).usable, 24_576)
+  assert.equal(linesFor({ window: 32_768, reserve: 8192 }).check, 19_660)
   // A reply that would take the whole window still leaves half of it.
   assert.equal(linesFor({ window: 100_000, reserve: 200_000 }).usable, 50_000)
   for (const checkRatio of [0, 1, 1.5, -1, 'x', undefined]) {
@@ -20,6 +27,21 @@ test('a model without a window counts as the default, and odd settings fall back
   }
   // The check line never passes the hard line.
   assert.equal(linesFor({ window: 100_000, reserve: 0, checkRatio: 0.99 }).check, 95_000)
+})
+
+test('a note that fits keeps its budget; one that would overflow the window is shortened', () => {
+  assert.equal(completionRoom({ window: 500_000, used: 10_000, asked: 8192 }), 8192)
+  assert.equal(completionRoom({ window: '32768', used: 30_000, asked: 8192 }), Math.floor(32_768 * 0.95) - 30_000)
+  assert.equal(completionRoom({ window: 32_768, used: 40_000, asked: 8192 }), 1)
+  assert.equal(completionRoom({ used: 100, asked: undefined }), undefined)
+  assert.equal(completionRoom({ window: undefined, used: 100, asked: 8192 }), 8192)
+})
+
+test('a group prompt keeps the fixed line cap on a large window and a share of a small one', () => {
+  assert.equal(groupLineLimit({ usable: 500_000 }), 20_000)
+  assert.equal(groupLineLimit(undefined), 20_000)
+  assert.equal(groupLineLimit({ usable: 24_576 }), Math.floor(24_576 / 8))
+  assert.equal(groupLineLimit({ usable: 100 }), 400)
 })
 
 test('the steward\'s answer is read from its JSON, and nothing else counts', () => {
